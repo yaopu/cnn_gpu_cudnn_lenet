@@ -27,9 +27,14 @@
 #include "layers/MaxPoolingLayer.h"
 #include "layers/FullyConnectedLayer.h"
 #include "Network.h"
+#include <chrono>
+
+using namespace std::chrono;
 
 // Block width for CUDA kernels
 #define BLOCK_WIDTH 128
+
+#define TIME_MEASURE true
 
 /**
  * Fills a floating-point array with ones.
@@ -56,9 +61,16 @@ static inline unsigned int RoundUp(unsigned int nominator, unsigned int denomina
 
 int main()
 {
+#if TIME_MEASURE
+    size_t sumForwardMicroseconds = 0;
+    size_t sumBackwardMicroseconds = 0;
+    size_t averageForwardMicroseconds = 0;
+    size_t averageBackwardMicroseconds = 0;
+#endif
+
     size_t width, height, channels = 1;
     size_t BATCH_SIZE = 64;
-    size_t ITERATIONS = 5;
+    size_t ITERATIONS = 15;
 
     // Open input data
     printf("Reading input data\n");
@@ -112,13 +124,13 @@ int main()
     }
 
     // Create the network architecture
-    ConvolutionalLayer conv1((int)channels, 20, 5, (int)width, (int)height);
+    ConvolutionalLayer conv1((int)channels, 6, 5, (int)width, (int)height);
     MaxPoolingLayer pool1(2, 2);
-    ConvolutionalLayer conv2(conv1.getOutputChannels(), 50, 5, conv1.getOutputWidth() / pool1.getStride(), conv1.getOutputHeight() / pool1.getStride());
+    ConvolutionalLayer conv2(conv1.getOutputChannels(), 16, 5, conv1.getOutputWidth() / pool1.getStride(), conv1.getOutputHeight() / pool1.getStride());
     MaxPoolingLayer pool2(2, 2);
     FullyConnectedLayer fc1((conv2.getOutputChannels()*conv2.getOutputWidth()*conv2.getOutputHeight()) / (pool2.getStride() * pool2.getStride()),
-                            500);
-    FullyConnectedLayer fc2(fc1.getOutputs(), 10);
+                            120);
+    FullyConnectedLayer fc2(fc1.getOutputs(), 84);
 
     // Initialize CUDNN/CUBLAS network
     Network network(gpuId, BATCH_SIZE, conv1, pool1, conv2, pool2, fc1, fc2);
@@ -268,13 +280,22 @@ int main()
                             sizeof(float) * network.getBatchSize() * channels * width * height, cudaMemcpyHostToDevice);
             cudaMemcpyAsync(d_labels, &train_labels_float[batchNr * network.getBatchSize()],
                             sizeof(float) * network.getBatchSize(), cudaMemcpyHostToDevice);
+#if TIME_MEASURE
+            high_resolution_clock::time_point t_forward_start = high_resolution_clock::now();
+#endif
 
             // Forward propagation
             network.ForwardPropagation(d_data, d_conv1, d_pool1, d_conv2, d_pool2, d_fc1, d_fc1relu, d_fc2, d_fc2smax,
                                        d_pconv1, d_pconv1bias, d_pconv2, d_pconv2bias, d_pfc1, d_pfc1bias, d_pfc2,
                                        d_pfc2bias,
                                        d_cudnn_workspace, d_onevec);
+#if TIME_MEASURE
+            high_resolution_clock::time_point t_forward_stop = high_resolution_clock::now();
+            sumForwardMicroseconds += duration_cast<microseconds>(t_forward_stop-t_forward_start).count();
 
+
+            high_resolution_clock::time_point t_backward_start = high_resolution_clock::now();
+#endif
             // Backward propagation
             network.Backpropagation(conv1, pool1, conv2, pool2,
                                     d_data, d_labels, d_conv1, d_pool1, d_conv2, d_pool2, d_fc1, d_fc1relu, d_fc2,
@@ -295,12 +316,25 @@ int main()
                                   d_pfc2bias,
                                   d_gconv1, d_gconv1bias, d_gconv2, d_gconv2bias, d_gfc1, d_gfc1bias, d_gfc2,
                                   d_gfc2bias);
+#if TIME_MEASURE
+            high_resolution_clock::time_point t_backward_stop = high_resolution_clock::now();
+            sumBackwardMicroseconds += duration_cast<microseconds>(t_backward_stop-t_backward_start).count();
+#endif
+
         }
     }
     cudaDeviceSynchronize();
     //auto t2 = std::chrono::high_resolution_clock::now();
 
     //printf("Iteration time: %f ms\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0f / FLAGS_iterations);
+
+#if TIME_MEASURE
+    averageForwardMicroseconds = sumForwardMicroseconds / (ITERATIONS*numBatches);
+    averageBackwardMicroseconds = sumBackwardMicroseconds / (ITERATIONS*numBatches);
+#endif
+
+    std::cout << "Average Forward duration in microseconds: " << averageForwardMicroseconds << std::endl;
+    std::cout << "Average Backward duration in microseconds: " << averageBackwardMicroseconds << std::endl;
 
 
     float classification_error = 1.0f;
