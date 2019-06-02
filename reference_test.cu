@@ -69,8 +69,8 @@ int main()
 #endif
 
     size_t width, height, channels = 1;
-    size_t BATCH_SIZE = 64;
-    size_t ITERATIONS = 15;
+    size_t BATCH_SIZE = 10;
+    size_t ITERATIONS = 1;
 
     // Open input data
     printf("Reading input data\n");
@@ -266,7 +266,7 @@ int main()
 
     // Use SGD to train the network
     cudaDeviceSynchronize();
-    //auto t1 = std::chrono::high_resolution_clock::now();
+    auto t1 = std::chrono::high_resolution_clock::now();
 
     size_t numBatches = train_size/network.getBatchSize();
     for (int iter = 0; iter < ITERATIONS; ++iter)
@@ -324,9 +324,9 @@ int main()
         }
     }
     cudaDeviceSynchronize();
-    //auto t2 = std::chrono::high_resolution_clock::now();
+    auto t2 = std::chrono::high_resolution_clock::now();
 
-    //printf("Iteration time: %f ms\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0f / FLAGS_iterations);
+    printf("Iteration time: %zu ms\n", std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() / ITERATIONS);
 
 #if TIME_MEASURE
     averageForwardMicroseconds = sumForwardMicroseconds / (ITERATIONS*numBatches);
