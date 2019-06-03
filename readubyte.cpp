@@ -1,23 +1,11 @@
-/*
- * This code is released into the public domain.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- * IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
- * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
- * OTHER DEALINGS IN THE SOFTWARE.
- */
-
 #include "readubyte.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
-#define UBYTE_IMAGE_MAGIC 2051
-#define UBYTE_LABEL_MAGIC 2049
+#define IMAGE_MAGIC 2051
+#define LABEL_MAGIC 2049
 
 #ifdef _MSC_VER
     #define bswap(x) _byteswap_ulong(x)
@@ -28,7 +16,7 @@
 #pragma pack(push, 1)
 struct UByteImageDataset 
 {
-    /// Magic number (UBYTE_IMAGE_MAGIC).
+    /// Magic number (IMAGE_MAGIC).
     uint32_t magic;
 
     /// Number of images in dataset.
@@ -65,7 +53,7 @@ struct UByteLabelDataset
 };
 #pragma pack(pop)
 
-size_t ReadUByteDataset(const char *image_filename, const char *label_filename,
+size_t readDataset(const char *image_filename, const char *label_filename,
                         uint8_t *data, uint8_t *labels, size_t& width, size_t& height)
 {
 
@@ -107,14 +95,14 @@ size_t ReadUByteDataset(const char *image_filename, const char *label_filename,
     label_header.Swap();
 
     // Verify datasets
-    if (image_header.magic != UBYTE_IMAGE_MAGIC)
+    if (image_header.magic != IMAGE_MAGIC)
     {
         printf("ERROR: Invalid dataset file (image file magic number)\n");
         fclose(imfp);
         fclose(lbfp);
         return 0;
     }
-    if (label_header.magic != UBYTE_LABEL_MAGIC)
+    if (label_header.magic != LABEL_MAGIC)
     {
         printf("ERROR: Invalid dataset file (label file magic number)\n");
         fclose(imfp);

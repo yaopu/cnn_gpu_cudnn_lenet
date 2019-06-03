@@ -1,17 +1,8 @@
 #include "Network.h"
 
-// Block width for CUDA kernels
 #define BLOCK_WIDTH 128
 
-/**
- * Computes the backpropagation results of the Softmax loss for each result in a batch.
- * Uses the softmax values obtained from forward propagation to compute the difference.
- *
- * @param label The training batch label values.
- * @param num_labels The number of possible labels.
- * @param batch_size The size of the trained batch.
- * @param diff The resulting gradient.
- */
+
 __global__ void SoftmaxLossBackprop(const float *label, int num_labels, int batch_size, float *diff)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -20,13 +11,9 @@ __global__ void SoftmaxLossBackprop(const float *label, int num_labels, int batc
 
     const int label_value = static_cast<int>(label[idx]);
 
-    // For each item in the batch, decrease the result of the label's value by 1
     diff[idx * num_labels + label_value] -= 1.0f;
 }
 
-/**
- * Computes ceil(x / y) for integral nonnegative values.
- */
 static inline unsigned int RoundUp(unsigned int nominator, unsigned int denominator)
 {
     return (nominator + denominator - 1) / denominator;
@@ -110,7 +97,6 @@ Network::Network(int gpuId, int batchSize,
     workspace = std::max(workspace, SetFwdConvolutionTensors(conv2, pool1Tensor, conv2Tensor, conv2filterDesc, conv2Desc, conv2algo));
     workspace = std::max(workspace, SetBwdConvolutionTensors(pool1Tensor, conv2Tensor, conv2filterDesc, conv2Desc, &conv2bwfalgo, &conv2bwdalgo));
 
-    // The workspace is allocated later (if necessary)
     m_workspaceSize = workspace;
 }
 
@@ -172,7 +158,6 @@ void Network::ForwardPropagation(float *data, float *conv1, float *pool1, float 
                         conv2, &beta, pool2Tensor, pool2);
 
     // FC1 layer
-    // Forward propagate neurons using weights (fc1 = pfc1'*pool2)
     cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
                 ref_fc1.getOutputs(), m_batchSize, ref_fc1.getInputs(),
                 &alpha,
@@ -180,7 +165,6 @@ void Network::ForwardPropagation(float *data, float *conv1, float *pool1, float 
                 pool2, ref_fc1.getInputs(),
                 &beta,
                 fc1, ref_fc1.getOutputs());
-    // Add bias using GEMM's "beta" (fc1 += pfc1bias*1_vec')
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                 ref_fc1.getOutputs(), m_batchSize, 1,
                 &alpha,
@@ -194,7 +178,6 @@ void Network::ForwardPropagation(float *data, float *conv1, float *pool1, float 
                            fc1Tensor, fc1, &beta, fc1Tensor, fc1relu);
 
     // FC2 layer
-    // Forward propagate neurons using weights (fc2 = pfc2'*fc1relu)
     cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
                 ref_fc2.getOutputs(), m_batchSize, ref_fc2.getInputs(),
                 &alpha,
@@ -202,7 +185,6 @@ void Network::ForwardPropagation(float *data, float *conv1, float *pool1, float 
                 fc1relu, ref_fc2.getInputs(),
                 &beta,
                 fc2, ref_fc2.getOutputs());
-    // Add bias using GEMM's "beta" (fc2 += pfc2bias*1_vec')
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N,
                 ref_fc2.getOutputs(), m_batchSize, 1,
                 &alpha,
@@ -235,23 +217,18 @@ void Network::Backpropagation(ConvolutionalLayer& layer_conv1, MaxPoolingLayer& 
 
     cudaSetDevice(m_gpuid);
 
-    // Initialization (using the training error function)
     cudaMemcpyAsync(dloss_data, fc2smax, sizeof(float) * m_batchSize * ref_fc2.getOutputs(), cudaMemcpyDeviceToDevice);
 
     // Softmax layer
     SoftmaxLossBackprop<<<RoundUp(m_batchSize, BLOCK_WIDTH), BLOCK_WIDTH>>>(labels, ref_fc2.getOutputs(), m_batchSize, dloss_data);
 
-    // Accounting for batch size in SGD
     cublasSscal(cublasHandle, ref_fc2.getOutputs() * m_batchSize, &scalVal, dloss_data, 1);
 
     // FC2 layer
-    // Compute derivative with respect to weights: gfc2 = (fc1relu * dfc2smax')
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_T, ref_fc2.getInputs(), ref_fc2.getOutputs(), m_batchSize,
                 &alpha, fc1relu, ref_fc2.getInputs(), dloss_data, ref_fc2.getOutputs(), &beta, gfc2, ref_fc2.getInputs());
-    // Compute derivative with respect to bias: gfc2bias = dfc2smax * 1_vec
     cublasSgemv(cublasHandle, CUBLAS_OP_N, ref_fc2.getOutputs(), m_batchSize,
                 &alpha, dloss_data, ref_fc2.getOutputs(), onevec, 1, &beta, gfc2bias, 1);
-    // Compute derivative with respect to data (for previous layer): pfc2*dfc2smax (500x10*10xN)
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, ref_fc2.getInputs(), m_batchSize, ref_fc2.getOutputs(),
                 &alpha, pfc2, ref_fc2.getInputs(), dloss_data, ref_fc2.getOutputs(), &beta, dfc2, ref_fc2.getInputs());
 
@@ -261,13 +238,10 @@ void Network::Backpropagation(ConvolutionalLayer& layer_conv1, MaxPoolingLayer& 
                             fc1Tensor, fc1, &beta, fc1Tensor, dfc1relu);
 
     // FC1 layer
-    // Compute derivative with respect to weights: gfc1 = (pool2 * dfc1relu')
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_T, ref_fc1.getInputs(), ref_fc1.getOutputs(), m_batchSize,
                 &alpha, pool2, ref_fc1.getInputs(), dfc1relu, ref_fc1.getOutputs(), &beta, gfc1, ref_fc1.getInputs());
-    // Compute derivative with respect to bias: gfc1bias = dfc1relu * 1_vec
     cublasSgemv(cublasHandle, CUBLAS_OP_N, ref_fc1.getOutputs(), m_batchSize,
                 &alpha, dfc1relu, ref_fc1.getOutputs(), onevec, 1, &beta, gfc1bias, 1);
-    // Compute derivative with respect to data (for previous layer): pfc1*dfc1relu (800x500*500xN)
     cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, ref_fc1.getInputs(), m_batchSize, ref_fc1.getOutputs(),
                 &alpha, pfc1, ref_fc1.getInputs(), dfc1relu, ref_fc1.getOutputs(), &beta, dfc1, ref_fc1.getInputs());
 
@@ -305,7 +279,6 @@ void Network::Backpropagation(ConvolutionalLayer& layer_conv1, MaxPoolingLayer& 
                                    conv1bwfalgo, workspace, m_workspaceSize,
                                    &beta, conv1filterDesc, gconv1);
 
-    // No need for convBackwardData because there are no more layers below
 }
 
 void Network::UpdateWeights(float learning_rate,
@@ -388,7 +361,6 @@ size_t Network::SetFwdConvolutionTensors(ConvolutionalLayer& conv, cudnnTensorDe
                                                    CUDNN_CROSS_CORRELATION);
 #endif
 
-    // Find dimension of convolution output
     cudnnGetConvolution2dForwardOutputDim(convDesc,
                                           srcTensorDesc,
                                           filterDesc,

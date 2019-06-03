@@ -28,7 +28,7 @@
  * @param height The height of each image.
  * @return Number of images in dataset.
  */
-size_t ReadUByteDataset(const char* image_filename, const char* label_filename, 
+size_t readDataset(const char* image_filename, const char* label_filename,
                         uint8_t *data, uint8_t *labels, size_t& width, size_t& height);
 
 #endif  // __CUDNN_TRAINING_READUBYTE_H

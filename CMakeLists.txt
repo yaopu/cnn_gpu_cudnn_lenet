@@ -3,16 +3,8 @@ project(cnn_gpu_cudnn_lenet)
 
 find_package(CUDA 6.5 REQUIRED)
 
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message("Debug mode")
-    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_50,code=compute_50;-std=c++11;-g;-lineinfo;-Xcompiler;-ggdb)
-else()
-    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_50,code=compute_50;-std=c++11;-O3;-DNDEBUG;-Xcompiler;-DNDEBUG)
-endif()
-
 set(CUDA_PROPAGATE_HOST_FLAGS OFF)
 
-# Addresses a bug where code is not compiled as C++11 in non-CUDA code and older g++ versions
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 include_directories($ENV{CUDNN_PATH} $ENV{CUDNN_PATH}/include)

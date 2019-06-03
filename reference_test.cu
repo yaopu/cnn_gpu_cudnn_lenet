@@ -1,18 +1,9 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <cmath>
-#include <ctime>
-#include <cfloat>
 
-#include <algorithm>
-#include <chrono>
-#include <iomanip>
 #include <iostream>
-#include <map>
-#include <memory>
 #include <random>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -29,20 +20,14 @@
 #include "Network.h"
 #include <chrono>
 
+using std::cout;
 using namespace std::chrono;
 
-// Block width for CUDA kernels
 #define BLOCK_WIDTH 128
 
 #define TIME_MEASURE true
 
-/**
- * Fills a floating-point array with ones.
- *
- * @param vec The array to fill.
- * @param size The number of elements in the array.
- */
-__global__ void FillOnes(float *vec, int size)
+__global__ void FillArrayWithOnes(float *vec, int size)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= size)
@@ -51,9 +36,6 @@ __global__ void FillOnes(float *vec, int size)
     vec[idx] = 1.0f;
 }
 
-/**
- * Computes ceil(x / y) for integral nonnegative values.
- */
 static inline unsigned int RoundUp(unsigned int nominator, unsigned int denominator)
 {
     return (nominator + denominator - 1) / denominator;
@@ -72,28 +54,28 @@ int main()
     size_t BATCH_SIZE = 10;
     size_t ITERATIONS = 1;
 
-    // Open input data
-    printf("Reading input data\n");
+    cout << "-- CNN LeNet cuDNN Test on GPU --\n" << std::endl;
+    cout << "Loading Image Data..." << std::flush;
     
-    // Read dataset sizes
-    size_t train_size = ReadUByteDataset("../data/train-images-idx3-ubyte", "../data/train-labels-idx1-ubyte", nullptr, nullptr, width, height);
-    size_t test_size = ReadUByteDataset("../data/t10k-images-idx3-ubyte", "../data/t10k-labels-idx1-ubyte", nullptr, nullptr, width, height);
+    // Load dataset sizes
+    size_t train_size = readDataset("../data/train-images-idx3-ubyte", "../data/train-labels-idx1-ubyte", nullptr, nullptr, width, height);
+    size_t test_size = readDataset("../data/t10k-images-idx3-ubyte", "../data/t10k-labels-idx1-ubyte", nullptr, nullptr, width, height);
     if (train_size == 0)
         return 1;
     
     std::vector<uint8_t> train_images(train_size * width * height * channels), train_labels(train_size);
     std::vector<uint8_t> test_images(test_size * width * height * channels), test_labels(test_size);
 
-    // Read data from datasets
-    if (ReadUByteDataset("../data/train-images-idx3-ubyte", "../data/train-labels-idx1-ubyte", &train_images[0], &train_labels[0], width, height) != train_size)
+    // Load data from datasets
+    if (readDataset("../data/train-images-idx3-ubyte", "../data/train-labels-idx1-ubyte", &train_images[0], &train_labels[0], width, height) != train_size)
         return 2;
-    if (ReadUByteDataset("../data/t10k-images-idx3-ubyte", "../data/t10k-labels-idx1-ubyte", &test_images[0], &test_labels[0], width, height) != test_size)
+    if (readDataset("../data/t10k-images-idx3-ubyte", "../data/t10k-labels-idx1-ubyte", &test_images[0], &test_labels[0], width, height) != test_size)
         return 3;
 
-    printf("Done. Training dataset size: %d, Test dataset size: %d\n", (int)train_size, (int)test_size);
-    printf("Image size: %dx%dx%d, Batch size: %d, iterations: %d\n",width, height, channels, BATCH_SIZE, ITERATIONS);
+    cout << "done\n" << std::endl;
+    cout << "Image size: "<< width << "x"<<height<<"x"<<channels<<", Batch size: "<< BATCH_SIZE << ", Iterations: " << ITERATIONS << std::endl;
 
-    // Choose GPU
+    // Show gpus and choose the first
     int num_gpus;
     cudaGetDeviceCount(&num_gpus);
 
@@ -123,7 +105,6 @@ int main()
                2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6);
     }
 
-    // Create the network architecture
     ConvolutionalLayer conv1((int)channels, 6, 5, (int)width, (int)height);
     MaxPoolingLayer pool1(2, 2);
     ConvolutionalLayer conv2(conv1.getOutputChannels(), 16, 5, conv1.getOutputWidth() / pool1.getStride(), conv1.getOutputHeight() / pool1.getStride());
@@ -132,14 +113,12 @@ int main()
                             120);
     FullyConnectedLayer fc2(fc1.getOutputs(), 84);
 
-    // Initialize CUDNN/CUBLAS network
     Network network(gpuId, BATCH_SIZE, conv1, pool1, conv2, pool2, fc1, fc2);
 
-    // Create random network
+    // random weight initialising
     std::random_device rd;
     std::mt19937 gen(rd());
 
-    // Xavier weight filling
     float wconv1 = sqrt(3.0f / (conv1.getFilterSize() * conv1.getFilterSize() * conv1.getInputChannels()));
     std::uniform_real_distribution<> dconv1(-wconv1, wconv1);
     float wconv2 = sqrt(3.0f / (conv2.getFilterSize() * conv2.getFilterSize() * conv2.getInputChannels()));
@@ -149,7 +128,6 @@ int main()
     float wfc2 = sqrt(3.0f / (fc2.getInputs() * fc2.getOutputs()));
     std::uniform_real_distribution<> dfc2(-wfc2, wfc2);
 
-    // Randomize network
     for (auto&& iter : conv1.getPconv())
         iter = static_cast<float>(dconv1(gen));
     for (auto&& iter : conv1.getPbias())
@@ -167,14 +145,12 @@ int main()
     for (auto&& iter : fc2.getPbias())
         iter = static_cast<float>(dfc2(gen));
 
-    
-    /////////////////////////////////////////////////////////////////////////////
-    // Create GPU data structures    
 
-    // Forward propagation data
+    //--------- Allocate GPU memory ----------
+
+
     float *d_data, *d_labels, *d_conv1, *d_pool1, *d_conv2, *d_pool2, *d_fc1, *d_fc1relu, *d_fc2, *d_fc2smax;
-    //                         Buffer    | Element       | N                   | C                  | H                                 | W
-    //-----------------------------------------------------------------------------------------------------------------------------------------
+
     cudaMalloc(&d_data,    sizeof(float) * network.getBatchSize() * channels           * height                            * width);
     cudaMalloc(&d_labels,  sizeof(float) * network.getBatchSize() * 1                  * 1                                 * 1);
     cudaMalloc(&d_conv1,   sizeof(float) * network.getBatchSize() * conv1.getOutputChannels() * conv1.getOutputHeight()                  * conv1.getOutputWidth());
@@ -186,8 +162,6 @@ int main()
     cudaMalloc(&d_fc2,     sizeof(float) * network.getBatchSize() * fc2.getOutputs());
     cudaMalloc(&d_fc2smax, sizeof(float) * network.getBatchSize() * fc2.getOutputs());
 
-
-    // Network parameters
     float *d_pconv1, *d_pconv1bias, *d_pconv2, *d_pconv2bias;
     float *d_pfc1, *d_pfc1bias, *d_pfc2, *d_pfc2bias;
     
@@ -200,8 +174,6 @@ int main()
     cudaMalloc(&d_pfc2,       sizeof(float) * fc2.getPneurons().size());
     cudaMalloc(&d_pfc2bias,   sizeof(float) * fc2.getPbias().size());
 
-    
-    // Network parameter gradients
     float *d_gconv1, *d_gconv1bias, *d_gconv2, *d_gconv2bias;
     float *d_gfc1, *d_gfc1bias, *d_gfc2, *d_gfc2bias;
     
@@ -213,12 +185,8 @@ int main()
     cudaMalloc(&d_gfc1bias,   sizeof(float) * fc1.getPbias().size());
     cudaMalloc(&d_gfc2,       sizeof(float) * fc2.getPneurons().size());
     cudaMalloc(&d_gfc2bias,   sizeof(float) * fc2.getPbias().size());
-    
-    
-    // Differentials w.r.t. data
+
     float *d_dpool1, *d_dpool2, *d_dconv2, *d_dfc1, *d_dfc1relu, *d_dfc2, *d_dfc2smax, *d_dlossdata;
-    //                         Buffer     | Element       | N                   | C                  | H                                 | W
-    //-----------------------------------------------------------------------------------------------------------------------------------------
     cudaMalloc(&d_dpool1,   sizeof(float) * network.getBatchSize() * conv1.getOutputChannels() * conv1.getOutputHeight()                  * conv1.getOutputWidth());
     cudaMalloc(&d_dpool2,   sizeof(float) * network.getBatchSize() * conv2.getOutputChannels() * conv2.getOutputHeight()                  * conv2.getOutputWidth());
     cudaMalloc(&d_dconv2,   sizeof(float) * network.getBatchSize() * conv1.getOutputChannels() * (conv1.getOutputHeight() / pool1.getStride()) * (conv1.getOutputWidth() / pool1.getStride()));
@@ -229,14 +197,13 @@ int main()
     cudaMalloc(&d_dlossdata,sizeof(float) * network.getBatchSize() * fc2.getOutputs());
     
 
-    // Temporary buffers and workspaces
+    // cudnn workspace allocation
     float *d_onevec;
     void *d_cudnn_workspace = nullptr;    
     cudaMalloc(&d_onevec, sizeof(float)* network.getBatchSize());
     if (network.getWorkspaceSize() > 0)
         cudaMalloc(&d_cudnn_workspace, network.getWorkspaceSize());
 
-    /////////////////////////////////////////////////////////////////////////////
 
     // Copy initial network to device
     cudaMemcpyAsync(d_pconv1, &conv1.getPconv()[0],     sizeof(float) * conv1.getPconv().size(),  cudaMemcpyHostToDevice);
@@ -250,9 +217,9 @@ int main()
 
 
     // Fill one-vector with ones
-    FillOnes<<<RoundUp(network.getBatchSize(), BLOCK_WIDTH), BLOCK_WIDTH>>>(d_onevec, network.getBatchSize());
+    FillArrayWithOnes<<<RoundUp(network.getBatchSize(), BLOCK_WIDTH), BLOCK_WIDTH>>>(d_onevec, network.getBatchSize());
 
-    printf("Preparing dataset\n");
+    cout << "\nNetwork initialized" << std::endl;
     
     // Normalize training set to be in [0,1]
     std::vector<float> train_images_float(train_images.size()), train_labels_float(train_size);
@@ -262,12 +229,11 @@ int main()
     for (size_t i = 0; i < train_size; ++i)
         train_labels_float[i] = (float)train_labels[i];
 
-    printf("Training...\n");
-
-    // Use SGD to train the network
+    cout << "Training started" << std::endl;
     cudaDeviceSynchronize();
     auto t1 = std::chrono::high_resolution_clock::now();
 
+    // iterate over training samples/minibatchs
     size_t numBatches = train_size/network.getBatchSize();
     for (int iter = 0; iter < ITERATIONS; ++iter)
     {
@@ -326,7 +292,7 @@ int main()
     cudaDeviceSynchronize();
     auto t2 = std::chrono::high_resolution_clock::now();
 
-    printf("Iteration time: %zu ms\n", std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() / ITERATIONS);
+    cout << "Average time for one epoch: " << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() / ITERATIONS << "ms" << std::endl;
 
 #if TIME_MEASURE
     averageForwardMicroseconds = sumForwardMicroseconds / (ITERATIONS*numBatches);
@@ -386,10 +352,10 @@ int main()
         }
         classification_error = (float)num_errors / (float)classifications;
 
-        printf("Classification result: %.2f%% error (used %d images)\n", classification_error * 100.0f, (int)classifications);
+        cout << "Classification result: " << 100 - classification_error * 100.0f << "% correct images" << std::endl;
     }
         
-    // Free data structures
+    // free gpu memory
     cudaFree(d_data);
     cudaFree(d_conv1);
     cudaFree(d_pool1);
